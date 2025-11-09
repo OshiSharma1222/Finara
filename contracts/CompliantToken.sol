@@ -24,6 +24,9 @@ contract CompliantToken is ERC20, Ownable, ReentrancyGuard {
     // Mapping to track frozen addresses (for compliance)
     mapping(address => bool) public isFrozen;
     
+    // Mapping to track authorized verifiers (e.g., relayers)
+    mapping(address => bool) public isAuthorizedVerifier;
+    
     // Bank address that deployed this token
     address public bankAddress;
     
@@ -44,7 +47,7 @@ contract CompliantToken is ERC20, Ownable, ReentrancyGuard {
     
     modifier onlyBankOrOwner() {
         require(
-            msg.sender == bankAddress || msg.sender == owner(),
+            msg.sender == bankAddress || msg.sender == owner() || isAuthorizedVerifier[msg.sender],
             "CompliantToken: Not authorized"
         );
         _;
@@ -58,6 +61,23 @@ contract CompliantToken is ERC20, Ownable, ReentrancyGuard {
         require(bankAddress == address(0), "CompliantToken: Already initialized");
         bankAddress = _bankAddress;
         maxSupply = _maxSupply;
+    }
+    
+    /**
+     * @dev Add an authorized verifier (e.g., relayer)
+     * @param verifier Address to authorize
+     */
+    function addAuthorizedVerifier(address verifier) external onlyOwner {
+        require(verifier != address(0), "CompliantToken: Invalid verifier address");
+        isAuthorizedVerifier[verifier] = true;
+    }
+    
+    /**
+     * @dev Remove an authorized verifier
+     * @param verifier Address to remove
+     */
+    function removeAuthorizedVerifier(address verifier) external onlyOwner {
+        isAuthorizedVerifier[verifier] = false;
     }
     
     /**

@@ -57,6 +57,13 @@ router.post('/deployBank', async (req, res) => {
       });
     }
     
+    // Authorize relayer on the token contract
+    const authResult = await relayer.authorizeRelayer(deployment.tokenAddress);
+    if (!authResult.success) {
+      console.warn('Failed to authorize relayer:', authResult.error);
+      // Don't fail the deployment, just warn
+    }
+    
     // Store bank info in Supabase
     const { data: bankData, error: dbError } = await supabase
       .from('banks')

@@ -76,8 +76,9 @@ contract LendingContract is Ownable, ReentrancyGuard {
     constructor(
         address _tokenAddress,
         address _bankAddress,
-        uint256 _collateralizationRatio
-    ) Ownable(msg.sender) ReentrancyGuard() {
+        uint256 _collateralizationRatio,
+        address initialOwner
+    ) Ownable(initialOwner) ReentrancyGuard() {
         require(_tokenAddress != address(0), "LendingContract: Invalid token address");
         require(_bankAddress != address(0), "LendingContract: Invalid bank address");
         require(_collateralizationRatio >= 10000, "LendingContract: Invalid collateralization ratio"); // Min 100%

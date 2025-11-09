@@ -103,6 +103,30 @@ class RelayerService {
   }
   
   /**
+   * Authorize relayer on a token contract
+   */
+  async authorizeRelayer(tokenAddress) {
+    try {
+      const tokenContract = new ethers.Contract(tokenAddress, this.tokenABI, this.wallet);
+      
+      const tx = await tokenContract.addAuthorizedVerifier(this.wallet.address);
+      const receipt = await tx.wait();
+      
+      return {
+        success: true,
+        transactionHash: receipt.hash,
+        blockNumber: receipt.blockNumber
+      };
+    } catch (error) {
+      console.error('Error authorizing relayer:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+  
+  /**
    * Verify customer addresses on the token contract
    */
   async verifyCustomers(tokenAddress, addresses) {

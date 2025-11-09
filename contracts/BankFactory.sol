@@ -58,25 +58,28 @@ contract BankFactory is Ownable {
         require(maxSupply > 0, "BankFactory: Invalid max supply");
         require(collateralizationRatio >= 10000, "BankFactory: Invalid collateralization ratio");
         
-        // Deploy CompliantToken
+        // Deploy CompliantToken (factory is initial owner)
         CompliantToken token = new CompliantToken(
             tokenName,
             tokenSymbol,
-            msg.sender
+            address(this)
         );
         token.initialize(bankAddress, maxSupply);
         tokenAddress = address(token);
         
-        // Deploy LendingContract
+        // Deploy LendingContract (factory is initial owner)
         LendingContract lending = new LendingContract(
             tokenAddress,
             bankAddress,
-            collateralizationRatio
+            collateralizationRatio,
+            address(this)
         );
         lendingAddress = address(lending);
         
-        // Transfer ownership of token to lending contract (for minting)
-        // In production, you might want a different ownership structure
+        // Authorize the caller (relayer) to verify customers before transferring ownership
+        token.addAuthorizedVerifier(msg.sender);
+        
+        // Transfer ownership to bank
         token.transferOwnership(bankAddress);
         lending.transferOwnership(bankAddress);
         
