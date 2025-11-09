@@ -49,13 +49,24 @@ export default function NavBar(){
           style={{
             width: scrolled ? '36px' : '44px',
             height: scrolled ? '36px' : '44px',
-            transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)'
+            transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
+            borderRadius: '50%',
+            overflow: 'hidden',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: '2px solid rgba(199,255,58,0.3)'
           }}
         >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="12" cy="12" r="10" stroke="rgba(199,255,58,0.24)" strokeWidth="1.5" />
-            <path d="M8 12h8M12 8v8" stroke="white" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
+          <img 
+            src="/finara-logo.jpg" 
+            alt="Finara Logo" 
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover'
+            }}
+          />
         </div>
         <div 
           className="name"
@@ -81,8 +92,8 @@ export default function NavBar(){
           Home
         </a>
         <a 
-          className={isActive('/dashboard') || isActive('/customers') || isActive('/loans') ? 'active' : ''} 
-          onClick={() => navigate('/dashboard')}
+          className={isActive('/login') || isActive('/dashboard') || isActive('/customers') || isActive('/loans') ? 'active' : ''} 
+          onClick={() => navigate('/login')}
           style={{
             fontSize: scrolled ? '0.9rem' : '1rem',
             padding: scrolled ? '6px 10px' : '8px 12px',
@@ -112,17 +123,6 @@ export default function NavBar(){
           }}
         >
           Investor
-        </a>
-        <a 
-          className={isActive('/reports') ? 'active' : ''} 
-          onClick={() => navigate('/reports')}
-          style={{
-            fontSize: scrolled ? '0.9rem' : '1rem',
-            padding: scrolled ? '6px 10px' : '8px 12px',
-            transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)'
-          }}
-        >
-          Compliance
         </a>
       </div>
     </div>

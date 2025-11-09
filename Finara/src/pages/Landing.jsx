@@ -56,7 +56,7 @@ export default function Landing({ onExplore }){
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, delay: 0.2 }}
             >
-              <span style={{color:'var(--accent)',fontSize:'0.9rem',fontWeight:600}}>🚀 Next-Gen Web3 Banking Infrastructure</span>
+              <span style={{color:'var(--accent)',fontSize:'0.9rem',fontWeight:600}}> Next-Gen Web3 Banking Infrastructure</span>
             </motion.div>
             <motion.h1 
               style={{fontSize:'3.8rem',fontWeight:800,margin:'0 0 24px',lineHeight:1.1,background:'linear-gradient(135deg, #fff 0%, var(--accent) 100%)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}

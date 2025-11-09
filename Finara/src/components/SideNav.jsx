@@ -26,14 +26,23 @@ export default function SideNav({ active }){
           <div style={{
             width:48,
             height:48,
-            borderRadius:12,
+            borderRadius:'50%',
             background:'linear-gradient(135deg, rgba(199,255,58,0.14), rgba(155,225,43,0.06))',
             display:'grid',
             placeItems:'center',
             marginBottom:12,
-            border:'1px solid rgba(199,255,58,0.15)'
+            border:'2px solid rgba(199,255,58,0.25)',
+            overflow:'hidden'
           }}>
-            <span style={{fontSize:'1.5rem'}}>🏦</span>
+            <img 
+              src="/finara-logo.jpg" 
+              alt="Finara Logo" 
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover'
+              }}
+            />
           </div>
           <div style={{fontSize:'1.1rem',fontWeight:700,color:'var(--accent)'}}>Finara</div>
           <div style={{fontSize:'0.75rem',color:'var(--muted)'}}>Banking Platform</div>

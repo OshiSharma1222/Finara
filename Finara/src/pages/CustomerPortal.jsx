@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import NavBar from '../components/NavBar';
 import GlassPanel from '../components/GlassPanel';
 import Card from '../components/Card';
 import Footer from '../components/Footer';
 import '../styles/theme.css';
+import trading from '../services/trading';
+import blockchain from '../services/blockchain';
 
 // Mock customer data (in real app, this would come from authentication)
 const mockCustomerData = {
@@ -93,6 +95,11 @@ export default function CustomerPortal(){
   const [selectedAsset, setSelectedAsset] = useState(null);
   const [sellModal, setSellModal] = useState(false);
   const [sellForm, setSellForm] = useState({ price: '', percentage: '100' });
+  const [assets, setAssets] = useState(mockAssets);
+  const [tradeHistory, setTradeHistory] = useState([]);
+  const [blockchainTxns, setBlockchainTxns] = useState([]);
+  const [showTxModal, setShowTxModal] = useState(false);
+  const [currentTx, setCurrentTx] = useState(null);
 
   const handleLogin = (e) => {
     e.preventDefault();
@@ -104,6 +111,66 @@ export default function CustomerPortal(){
     }
   };
 
+  const acceptOffer = (match, asset) => {
+    // If asset already has a listingId, use it; otherwise create a temporary listing then buy
+    try{
+      let listingId = asset.listingId;
+      if(!listingId){
+        // parse numeric price
+        const offerNum = Number(String(match.offer).replace(/[^0-9.-]+/g, '')) || 0;
+        const created = trading.listAsset({
+          sellerId: mockCustomerData.accountNumber || mockCustomerData.id,
+          assetId: asset.id,
+          assetType: asset.type,
+          quantity: asset.quantity,
+          tokens: asset.tokens,
+          price: offerNum,
+          percentage: match.interest && match.interest.toLowerCase().includes('full') ? 100 : 50
+        });
+        listingId = created.listingId;
+        setAssets(prev => prev.map(a => a.id === asset.id ? {...a, listingStatus: 'Listed', listingId } : a));
+      }
+
+      // perform buy (the match.buyer is a name in mock; we'll use it as buyerId for demo)
+      const trade = trading.buyAsset({ buyerId: match.buyer, listingId });
+
+      // Record on blockchain
+      const blockchainTx = blockchain.recordTransaction({
+        type: 'ASSET_SALE',
+        from: mockCustomerData.wallet,
+        to: '0xBuyerAddress' + match.buyer.replace(/\s/g, ''),
+        assetType: asset.type,
+        assetId: asset.id,
+        amount: trade.price,
+        tokens: asset.tokens,
+        metadata: {
+          tradeId: trade.tradeId,
+          buyer: match.buyer
+        }
+      });
+
+      // update asset state to reflect sale
+      setAssets(prev => prev.map(a => a.id === asset.id ? {...a, listingStatus: 'Sold'} : a));
+      setTradeHistory(trading.getHistoryForAccount(mockCustomerData.accountNumber || mockCustomerData.id));
+      setBlockchainTxns(blockchain.getAccountTransactions(mockCustomerData.wallet));
+
+      // Show transaction details
+      setCurrentTx(blockchainTx);
+      setShowTxModal(true);
+    }catch(e){
+      console.error('accept offer failed', e);
+      alert('Failed to accept offer. See console for details.');
+    }
+  };
+
+  useEffect(() => {
+    if(isLoggedIn){
+      const acct = mockCustomerData.accountNumber || mockCustomerData.id;
+      setTradeHistory(trading.getHistoryForAccount(acct));
+      setBlockchainTxns(blockchain.getAccountTransactions(mockCustomerData.wallet));
+    }
+  }, [isLoggedIn]);
+
   const handleSellAsset = (asset) => {
     setSelectedAsset(asset);
     setSellForm({ price: asset.value.replace('₹', '').replace(',', ''), percentage: '100' });
@@ -111,58 +178,198 @@ export default function CustomerPortal(){
   };
 
   const submitSellListing = () => {
-    alert(`Asset listed for sale!\nAsset: ${selectedAsset.type}\nPercentage: ${sellForm.percentage}%\nPrice: ₹${sellForm.price}`);
-    setSellModal(false);
+    // create a persistent listing and update local state
+    try{
+      const priceNum = Number(String(sellForm.price).replace(/[^0-9.-]+/g, '')) || 0;
+      const listing = trading.listAsset({
+        sellerId: mockCustomerData.accountNumber || mockCustomerData.id,
+        assetId: selectedAsset.id,
+        assetType: selectedAsset.type,
+        quantity: selectedAsset.quantity,
+        tokens: selectedAsset.tokens,
+        price: priceNum,
+        percentage: sellForm.percentage
+      });
+
+      // Record on blockchain
+      const blockchainTx = blockchain.recordTransaction({
+        type: 'ASSET_LISTING',
+        from: mockCustomerData.wallet,
+        to: '0x0000000000000000000000000000000000000000', // Null address for listing
+        assetType: selectedAsset.type,
+        assetId: selectedAsset.id,
+        amount: priceNum,
+        tokens: selectedAsset.tokens,
+        metadata: {
+          listingId: listing.listingId,
+          percentage: sellForm.percentage
+        }
+      });
+
+      setAssets(prev => prev.map(a => a.id === selectedAsset.id ? {...a, listingStatus: 'Listed', listingId: listing.listingId } : a));
+      setTradeHistory(trading.getHistoryForAccount(mockCustomerData.accountNumber || mockCustomerData.id));
+      setBlockchainTxns(blockchain.getAccountTransactions(mockCustomerData.wallet));
+      
+      // Show transaction details
+      setCurrentTx(blockchainTx);
+      setShowTxModal(true);
+      setSellModal(false);
+    }catch(e){
+      console.error('listing failed', e);
+      alert('Failed to list asset. See console for details.');
+    }
   };
 
   if (!isLoggedIn) {
     return (
-      <div style={{minHeight:'100vh',background:'#000',paddingTop:'90px',display:'flex',alignItems:'center'}}>
+      <div style={{minHeight:'100vh',background:'#000',display:'flex',flexDirection:'column'}}>
         <NavBar />
-        <div style={{width:'100%',maxWidth:'480px',margin:'0 auto',padding:'0 20px'}}>
-          <GlassPanel style={{padding:'48px 40px'}}>
-            <div style={{textAlign:'center',marginBottom:32}}>
-              <div style={{fontSize:'3rem',marginBottom:16}}>👤</div>
-              <h2 style={{fontSize:'2rem',fontWeight:700,marginBottom:8,color:'#fff'}}>Customer Login</h2>
-              <p className="small-muted">Access your assets, KYC details, and loan information</p>
-            </div>
+        <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
+          <div style={{width:'100%',maxWidth:'520px'}}>
+            <GlassPanel style={{padding:'56px 48px',position:'relative',overflow:'hidden'}}>
+              {/* Decorative Elements */}
+              <div style={{
+                position:'absolute',
+                top:'-50px',
+                right:'-50px',
+                width:'200px',
+                height:'200px',
+                background:'radial-gradient(circle, rgba(199,255,58,0.08) 0%, transparent 70%)',
+                borderRadius:'50%',
+                pointerEvents:'none'
+              }}></div>
+              <div style={{
+                position:'absolute',
+                bottom:'-30px',
+                left:'-30px',
+                width:'150px',
+                height:'150px',
+                background:'radial-gradient(circle, rgba(155,225,43,0.06) 0%, transparent 70%)',
+                borderRadius:'50%',
+                pointerEvents:'none'
+              }}></div>
 
-            <form onSubmit={handleLogin}>
-              <div style={{marginBottom:20}}>
-                <label style={{display:'block',marginBottom:8,fontWeight:600,color:'#fff'}}>Account Number</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="Enter your account number"
-                  value={loginForm.accountNumber}
-                  onChange={(e) => setLoginForm({...loginForm, accountNumber: e.target.value})}
-                  required
-                  style={{width:'100%',padding:'14px 16px',fontSize:'1rem'}}
-                />
+              <div style={{textAlign:'center',marginBottom:40,position:'relative'}}>
+                <div style={{
+                  fontSize:'4rem',
+                  marginBottom:20,
+                  filter:'drop-shadow(0 4px 12px rgba(199,255,58,0.2))'
+                }}>👤</div>
+                <h2 style={{fontSize:'2.2rem',fontWeight:700,marginBottom:12,color:'#fff',letterSpacing:'-0.02em'}}>
+                  Customer Portal
+                </h2>
+                <p className="small-muted" style={{fontSize:'1.05rem',lineHeight:1.6}}>
+                  Manage your assets, view KYC details, and access loans
+                </p>
               </div>
 
-              <div style={{marginBottom:24}}>
-                <label style={{display:'block',marginBottom:8,fontWeight:600,color:'#fff'}}>Password</label>
-                <input
-                  type="password"
-                  className="form-input"
-                  placeholder="Enter your password"
-                  value={loginForm.password}
-                  onChange={(e) => setLoginForm({...loginForm, password: e.target.value})}
-                  required
-                  style={{width:'100%',padding:'14px 16px',fontSize:'1rem'}}
-                />
-              </div>
+              <form onSubmit={handleLogin}>
+                <div style={{marginBottom:24}}>
+                  <label style={{display:'block',marginBottom:10,fontWeight:600,color:'#fff',fontSize:'0.95rem'}}>
+                    Account Number
+                  </label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Enter your account number"
+                    value={loginForm.accountNumber}
+                    onChange={(e) => setLoginForm({...loginForm, accountNumber: e.target.value})}
+                    required
+                    style={{
+                      width:'100%',
+                      padding:'16px 18px',
+                      fontSize:'1rem',
+                      background:'rgba(255,255,255,0.04)',
+                      border:'1px solid rgba(255,255,255,0.12)',
+                      borderRadius:12,
+                      color:'#fff',
+                      transition:'all 0.3s ease'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = 'var(--accent)'}
+                    onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.12)'}
+                  />
+                </div>
 
-              <button type="submit" className="btn primary" style={{width:'100%',padding:'14px',fontSize:'1rem',marginBottom:16}}>
-                Login to Portal
-              </button>
+                <div style={{marginBottom:32}}>
+                  <label style={{display:'block',marginBottom:10,fontWeight:600,color:'#fff',fontSize:'0.95rem'}}>
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    className="form-input"
+                    placeholder="Enter your password"
+                    value={loginForm.password}
+                    onChange={(e) => setLoginForm({...loginForm, password: e.target.value})}
+                    required
+                    style={{
+                      width:'100%',
+                      padding:'16px 18px',
+                      fontSize:'1rem',
+                      background:'rgba(255,255,255,0.04)',
+                      border:'1px solid rgba(255,255,255,0.12)',
+                      borderRadius:12,
+                      color:'#fff',
+                      transition:'all 0.3s ease'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = 'var(--accent)'}
+                    onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.12)'}
+                  />
+                  <div style={{marginTop:10,textAlign:'right'}}>
+                    <a href="#" style={{fontSize:'0.9rem',color:'var(--accent)',textDecoration:'none'}}>
+                      Forgot Password?
+                    </a>
+                  </div>
+                </div>
 
-              <div style={{textAlign:'center',fontSize:'0.9rem',color:'var(--muted)'}}>
-                Demo: Use password <span style={{color:'var(--accent)',fontWeight:600}}>demo123</span> with any account number
-              </div>
-            </form>
-          </GlassPanel>
+                <button 
+                  type="submit" 
+                  className="btn primary" 
+                  style={{
+                    width:'100%',
+                    padding:'16px',
+                    fontSize:'1.05rem',
+                    fontWeight:600,
+                    marginBottom:24,
+                    background:'linear-gradient(135deg, var(--accent) 0%, #9be12b 100%)',
+                    border:'none',
+                    boxShadow:'0 4px 16px rgba(199,255,58,0.25)',
+                    transition:'all 0.3s ease'
+                  }}
+                  onMouseOver={(e) => {
+                    e.target.style.transform = 'translateY(-2px)';
+                    e.target.style.boxShadow = '0 6px 24px rgba(199,255,58,0.35)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.target.style.transform = 'translateY(0)';
+                    e.target.style.boxShadow = '0 4px 16px rgba(199,255,58,0.25)';
+                  }}
+                >
+                  Login to Portal
+                </button>
+
+                <div style={{
+                  padding:'16px',
+                  background:'rgba(199,255,58,0.05)',
+                  border:'1px solid rgba(199,255,58,0.15)',
+                  borderRadius:12,
+                  marginBottom:20
+                }}>
+                  <div style={{fontSize:'0.9rem',color:'rgba(255,255,255,0.7)',marginBottom:6}}>
+                    🔐 <strong style={{color:'#fff'}}>Demo Credentials</strong>
+                  </div>
+                  <div style={{fontSize:'0.9rem',color:'rgba(255,255,255,0.6)'}}>
+                    Account: <span style={{color:'var(--accent)',fontWeight:600,fontFamily:'monospace'}}>any number</span>
+                    {' • '}
+                    Password: <span style={{color:'var(--accent)',fontWeight:600,fontFamily:'monospace'}}>demo123</span>
+                  </div>
+                </div>
+
+                <div style={{textAlign:'center',fontSize:'0.9rem',color:'var(--muted)'}}>
+                  New customer? <a href="#" style={{color:'var(--accent)',textDecoration:'none',fontWeight:600}}>Contact Bank</a>
+                </div>
+              </form>
+            </GlassPanel>
+          </div>
         </div>
         <Footer />
       </div>
@@ -184,14 +391,14 @@ export default function CustomerPortal(){
 
         {/* Tabs */}
         <div style={{display:'flex',gap:12,marginBottom:32,borderBottom:'1px solid rgba(255,255,255,0.1)',paddingBottom:12}}>
-          {['overview', 'assets', 'kyc', 'loans', 'marketplace'].map((tab) => (
+          {['overview', 'assets', 'kyc', 'loans', 'blockchain', 'marketplace'].map((tab) => (
             <button
               key={tab}
               className={activeTab === tab ? 'btn primary' : 'btn'}
               onClick={() => setActiveTab(tab)}
               style={{padding:'10px 24px',fontSize:'1rem',textTransform:'capitalize'}}
             >
-              {tab === 'kyc' ? 'KYC Details' : tab}
+              {tab === 'kyc' ? 'KYC Details' : tab === 'blockchain' ? '⛓️ Blockchain' : tab}
             </button>
           ))}
         </div>
@@ -226,7 +433,7 @@ export default function CustomerPortal(){
               <GlassPanel style={{padding:28}}>
                 <h3 style={{fontSize:'1.4rem',fontWeight:700,marginBottom:20,color:'#fff'}}>Your Assets</h3>
                 <div style={{display:'flex',flexDirection:'column',gap:16}}>
-                  {mockAssets.map((asset) => (
+                  {assets.map((asset) => (
                     <div key={asset.id} style={{
                       padding:20,
                       background:'rgba(255,255,255,0.02)',
@@ -309,7 +516,7 @@ export default function CustomerPortal(){
         {/* Assets Tab */}
         {activeTab === 'assets' && (
           <div style={{display:'flex',flexDirection:'column',gap:24}}>
-            {mockAssets.map((asset) => (
+            {assets.map((asset) => (
               <GlassPanel key={asset.id} style={{padding:28}}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'start',marginBottom:24}}>
                   <div>
@@ -398,7 +605,7 @@ export default function CustomerPortal(){
                                 {match.offer}
                               </div>
                               <div style={{display:'flex',gap:8}}>
-                                <button className="btn primary" style={{padding:'8px 16px',fontSize:'0.9rem'}}>
+                                <button className="btn primary" style={{padding:'8px 16px',fontSize:'0.9rem'}} onClick={() => acceptOffer(match, asset)}>
                                   ✓ Accept
                                 </button>
                                 <button className="btn" style={{padding:'8px 16px',fontSize:'0.9rem'}}>
@@ -414,6 +621,29 @@ export default function CustomerPortal(){
                 )}
               </GlassPanel>
             ))}
+          </div>
+        )}
+
+        {/* Transaction History (Customer) */}
+        {tradeHistory && tradeHistory.length > 0 && (
+          <div style={{marginTop:24}}>
+            <GlassPanel style={{padding:24}}>
+              <h3 style={{fontSize:'1.2rem',fontWeight:700,marginBottom:12,color:'#fff'}}>Transaction History</h3>
+              <div style={{display:'flex',flexDirection:'column',gap:12}}>
+                {tradeHistory.map((t) => (
+                  <div key={t.tradeId} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:12,background:'rgba(255,255,255,0.02)',borderRadius:10}}>
+                    <div>
+                      <div style={{fontWeight:700,color:'#fff'}}>{t.assetType} • {t.quantity}</div>
+                      <div style={{fontSize:'0.9rem',color:'var(--muted)'}}>{new Date(t.timestamp).toLocaleString()}</div>
+                    </div>
+                    <div style={{textAlign:'right'}}>
+                      <div style={{fontWeight:700,color:'var(--accent)'}}>₹{t.price}</div>
+                      <div style={{fontSize:'0.9rem',color:'var(--muted)'}}>Counterparty: {t.buyerId === (mockCustomerData.accountNumber || mockCustomerData.id) ? t.sellerId : t.buyerId}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </GlassPanel>
           </div>
         )}
 
@@ -536,6 +766,120 @@ export default function CustomerPortal(){
           </div>
         )}
 
+        {/* Blockchain Tab */}
+        {activeTab === 'blockchain' && (
+          <div>
+            <div style={{marginBottom:24}}>
+              <h3 style={{fontSize:'1.6rem',fontWeight:700,color:'#fff',marginBottom:8}}>Blockchain Transactions</h3>
+              <p className="small-muted">All your transactions recorded on the blockchain</p>
+            </div>
+
+            {blockchainTxns && blockchainTxns.length > 0 ? (
+              <div style={{display:'flex',flexDirection:'column',gap:16}}>
+                {blockchainTxns.map((tx) => (
+                  <GlassPanel key={tx.txHash} style={{padding:24}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'start',marginBottom:16}}>
+                      <div style={{flex:1}}>
+                        <div style={{display:'flex',gap:12,alignItems:'center',marginBottom:8}}>
+                          <span style={{
+                            fontSize:'1.5rem'
+                          }}>{tx.type === 'ASSET_LISTING' ? '🏷️' : tx.type === 'ASSET_SALE' ? '💰' : '🔄'}</span>
+                          <span style={{
+                            fontSize:'1.1rem',
+                            fontWeight:700,
+                            color:'#fff'
+                          }}>{tx.type.replace(/_/g, ' ')}</span>
+                          <span style={{
+                            padding:'4px 12px',
+                            borderRadius:6,
+                            background: 'rgba(130,202,157,0.1)',
+                            color: '#82ca9d',
+                            fontSize:'0.85rem',
+                            fontWeight:600
+                          }}>{tx.status}</span>
+                        </div>
+                        <div style={{fontSize:'0.95rem',color:'var(--muted)',marginBottom:12}}>
+                          {tx.assetType} • {tx.tokens} tokens • {new Date(tx.timestamp).toLocaleString()}
+                        </div>
+                        <div style={{
+                          padding:'12px',
+                          background:'rgba(0,0,0,0.2)',
+                          borderRadius:8,
+                          fontFamily:'monospace',
+                          fontSize:'0.85rem',
+                          color:'var(--accent)',
+                          wordBreak:'break-all'
+                        }}>
+                          <strong>Tx Hash:</strong> {tx.txHash}
+                        </div>
+                      </div>
+                      <div style={{textAlign:'right',marginLeft:24}}>
+                        <div style={{fontSize:'1.5rem',fontWeight:700,color:'var(--accent)',marginBottom:8}}>
+                          ₹{tx.amount?.toLocaleString()}
+                        </div>
+                        <div style={{fontSize:'0.85rem',color:'var(--muted)',marginBottom:8}}>
+                          Block: {tx.blockNumber}
+                        </div>
+                        <div style={{fontSize:'0.85rem',color:'var(--muted)',marginBottom:12}}>
+                          Confirmations: {tx.confirmations}
+                        </div>
+                        <button 
+                          className="btn"
+                          onClick={() => {
+                            setCurrentTx(tx);
+                            setShowTxModal(true);
+                          }}
+                          style={{padding:'8px 16px',fontSize:'0.9rem'}}
+                        >
+                          View Details
+                        </button>
+                      </div>
+                    </div>
+
+                    <div style={{
+                      display:'grid',
+                      gridTemplateColumns:'repeat(2,1fr)',
+                      gap:16,
+                      marginTop:16,
+                      paddingTop:16,
+                      borderTop:'1px solid rgba(255,255,255,0.1)'
+                    }}>
+                      <div>
+                        <div style={{fontSize:'0.85rem',color:'var(--muted)',marginBottom:4}}>From</div>
+                        <div style={{fontSize:'0.9rem',color:'#fff',fontFamily:'monospace'}}>
+                          {tx.from.slice(0,6)}...{tx.from.slice(-4)}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:'0.85rem',color:'var(--muted)',marginBottom:4}}>To</div>
+                        <div style={{fontSize:'0.9rem',color:'#fff',fontFamily:'monospace'}}>
+                          {tx.to.slice(0,6)}...{tx.to.slice(-4)}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:'0.85rem',color:'var(--muted)',marginBottom:4}}>Gas Used</div>
+                        <div style={{fontSize:'0.9rem',color:'#fff'}}>{tx.gasUsed?.toLocaleString()}</div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:'0.85rem',color:'var(--muted)',marginBottom:4}}>Gas Fee</div>
+                        <div style={{fontSize:'0.9rem',color:'#fff'}}>{tx.gasFee}</div>
+                      </div>
+                    </div>
+                  </GlassPanel>
+                ))}
+              </div>
+            ) : (
+              <GlassPanel style={{padding:40}}>
+                <div style={{textAlign:'center',padding:'40px 20px',color:'var(--muted)'}}>
+                  <div style={{fontSize:'4rem',marginBottom:16}}>⛓️</div>
+                  <div style={{fontSize:'1.2rem',marginBottom:12}}>No Blockchain Transactions Yet</div>
+                  <div>Your blockchain transactions will appear here once you list or sell assets</div>
+                </div>
+              </GlassPanel>
+            )}
+          </div>
+        )}
+
         {/* Marketplace Tab */}
         {activeTab === 'marketplace' && (
           <GlassPanel style={{padding:32}}>
@@ -627,6 +971,118 @@ export default function CustomerPortal(){
                 style={{padding:'14px 24px',fontSize:'1rem'}}
               >
                 Cancel
+              </button>
+            </div>
+          </GlassPanel>
+        </div>
+      )}
+
+      {/* Blockchain Transaction Modal */}
+      {showTxModal && currentTx && (
+        <div style={{
+          position:'fixed',
+          top:0,
+          left:0,
+          right:0,
+          bottom:0,
+          background:'rgba(0,0,0,0.9)',
+          backdropFilter:'blur(12px)',
+          display:'flex',
+          alignItems:'center',
+          justifyContent:'center',
+          zIndex:10000,
+          padding:20
+        }} onClick={() => setShowTxModal(false)}>
+          <GlassPanel style={{padding:40,maxWidth:650,width:'100%'}} onClick={(e) => e.stopPropagation()}>
+            <div style={{textAlign:'center',marginBottom:32}}>
+              <div style={{fontSize:'4rem',marginBottom:16}}>⛓️</div>
+              <h3 style={{fontSize:'2rem',fontWeight:700,color:'var(--accent)',marginBottom:8}}>
+                Transaction Recorded on Blockchain
+              </h3>
+              <p style={{color:'var(--muted)',fontSize:'1.05rem'}}>
+                Your transaction has been successfully recorded on the blockchain
+              </p>
+            </div>
+
+            <div style={{
+              background:'rgba(199,255,58,0.05)',
+              border:'1px solid rgba(199,255,58,0.2)',
+              borderRadius:12,
+              padding:20,
+              marginBottom:24
+            }}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Transaction Hash</span>
+                <span style={{color:'var(--accent)',fontFamily:'monospace',fontSize:'0.9rem',fontWeight:600}}>
+                  {currentTx.txHash.slice(0,10)}...{currentTx.txHash.slice(-8)}
+                </span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Block Number</span>
+                <span style={{color:'#fff',fontWeight:600}}>{currentTx.blockNumber}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Transaction Type</span>
+                <span style={{color:'#fff',fontWeight:600}}>{currentTx.type.replace(/_/g, ' ')}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Asset</span>
+                <span style={{color:'#fff',fontWeight:600}}>{currentTx.assetType}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Tokens</span>
+                <span style={{color:'#fff',fontWeight:600}}>{currentTx.tokens}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Amount</span>
+                <span style={{color:'var(--accent)',fontWeight:600}}>₹{currentTx.amount?.toLocaleString()}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Gas Fee</span>
+                <span style={{color:'#fff',fontWeight:600}}>{currentTx.gasFee}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Confirmations</span>
+                <span style={{color:'#82ca9d',fontWeight:600}}>✓ {currentTx.confirmations}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between'}}>
+                <span style={{color:'var(--muted)'}}>Status</span>
+                <span style={{
+                  padding:'4px 12px',
+                  borderRadius:6,
+                  background:'rgba(130,202,157,0.15)',
+                  color:'#82ca9d',
+                  fontSize:'0.85rem',
+                  fontWeight:600,
+                  textTransform:'uppercase'
+                }}>{currentTx.status}</span>
+              </div>
+            </div>
+
+            <div style={{display:'flex',gap:12}}>
+              <button 
+                className="btn" 
+                onClick={() => {
+                  navigator.clipboard.writeText(currentTx.txHash);
+                  alert('Transaction hash copied to clipboard!');
+                }}
+                style={{flex:1,padding:'14px',fontSize:'1rem'}}
+              >
+                📋 Copy Hash
+              </button>
+              <button 
+                className="btn" 
+                onClick={() => window.open(blockchain.getExplorerUrl(currentTx.txHash), '_blank')}
+                style={{flex:1,padding:'14px',fontSize:'1rem'}}
+              >
+                🔍 View on Explorer
+              </button>
+              <button 
+                className="btn primary" 
+                onClick={() => setShowTxModal(false)}
+                style={{padding:'14px 24px',fontSize:'1rem'}}
+              >
+                Close
               </button>
             </div>
           </GlassPanel>
