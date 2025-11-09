@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import NavBar from '../components/NavBar';
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
@@ -6,6 +6,8 @@ import GlassPanel from '../components/GlassPanel';
 import Card from '../components/Card';
 import Footer from '../components/Footer';
 import '../styles/theme.css';
+import trading from '../services/trading';
+import blockchain from '../services/blockchain';
 
 const marketData = [
   { time: '09:00', price: 102 },
@@ -40,11 +42,85 @@ export default function InvestorDashboard(){
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [activeTab, setActiveTab] = useState('portfolio');
+  const [investorId, setInvestorId] = useState(null);
+  const [marketplace, setMarketplace] = useState([]);
+  const [tradeHistory, setTradeHistory] = useState([]);
+  const [blockchainTxns, setBlockchainTxns] = useState([]);
+  const [showTxModal, setShowTxModal] = useState(false);
+  const [currentTx, setCurrentTx] = useState(null);
+  const [investorWallet, setInvestorWallet] = useState(null);
+
+  useEffect(() => {
+    if(investorId){
+      const mp = trading.getMarketplace();
+      setMarketplace(mp && mp.length ? mp : availableAssets);
+      setTradeHistory(trading.getHistoryForAccount(investorId));
+      if(investorWallet) {
+        setBlockchainTxns(blockchain.getAccountTransactions(investorWallet));
+      }
+    }
+  }, [investorId, investorWallet]);
+
+  const handleBuy = (asset) => {
+    try{
+      // If asset comes from our trading marketplace it may have listingId
+      const isListing = asset.listingId || asset.listingId === 0;
+      let listingId = asset.listingId;
+      if(!isListing){
+        // create listing from the availableAssets seed
+        const priceNum = Number(String(asset.price).replace(/[^0-9.-]+/g, '')) || 0;
+        const created = trading.listAsset({
+          sellerId: asset.owner || 'unknown-seller',
+          assetId: asset.id || (String(Date.now()) + '-' + Math.random().toString(36).slice(2,8)),
+          assetType: asset.assetType || asset.type,
+          quantity: asset.quantity,
+          tokens: asset.quantity,
+          price: priceNum,
+          percentage: 100
+        });
+        listingId = created.listingId;
+      }
+      const trade = trading.buyAsset({ buyerId: investorId || 'demo-investor', listingId });
+
+      // Record on blockchain
+      const blockchainTx = blockchain.recordTransaction({
+        type: 'ASSET_PURCHASE',
+        from: investorWallet || ('0xInvestor' + investorId),
+        to: asset.owner || 'Seller',
+        assetType: asset.assetType || asset.type,
+        assetId: asset.id,
+        amount: trade.price,
+        tokens: trade.tokens,
+        metadata: {
+          tradeId: trade.tradeId,
+          listingId
+        }
+      });
+
+      // refresh marketplace and history
+      setMarketplace(trading.getMarketplace());
+      setTradeHistory(trading.getHistoryForAccount(investorId));
+      if(investorWallet) {
+        setBlockchainTxns(blockchain.getAccountTransactions(investorWallet));
+      }
+
+      // Show transaction details
+      setCurrentTx(blockchainTx);
+      setShowTxModal(true);
+    }catch(e){
+      console.error('buy failed', e);
+      alert('Purchase failed. See console for details.');
+    }
+  };
 
   const handleLogin = (e) => {
     e.preventDefault();
     // Demo login - accept any email with password "demo123"
     if (loginForm.password === 'demo123') {
+      setInvestorId(loginForm.email || 'demo-investor');
+      // Generate a mock wallet address for the investor
+      const wallet = '0x' + loginForm.email.replace(/@/g,'').replace(/\./g,'').slice(0,8).padEnd(40, '0');
+      setInvestorWallet(wallet);
       setIsLoggedIn(true);
     } else {
       alert('Demo credentials: Any email with password "demo123"');
@@ -227,14 +303,14 @@ export default function InvestorDashboard(){
 
         {/* Tabs */}
         <div style={{display:'flex',gap:12,marginBottom:32,borderBottom:'1px solid rgba(255,255,255,0.1)',paddingBottom:12}}>
-          {['portfolio', 'marketplace', 'orders', 'analytics'].map((tab) => (
+          {['portfolio', 'marketplace', 'orders', 'blockchain', 'analytics'].map((tab) => (
             <button
               key={tab}
               className={activeTab === tab ? 'btn primary' : 'btn'}
               onClick={() => setActiveTab(tab)}
               style={{padding:'10px 24px',fontSize:'1rem',textTransform:'capitalize'}}
             >
-              {tab}
+              {tab === 'blockchain' ? '⛓️ Blockchain' : tab}
             </button>
           ))}
         </div>
@@ -365,15 +441,15 @@ export default function InvestorDashboard(){
             </div>
 
             <div style={{display:'flex',flexDirection:'column',gap:20}}>
-              {availableAssets.map((asset) => (
-                <GlassPanel key={asset.id} style={{padding:28}}>
+              {marketplace.map((asset) => (
+                <GlassPanel key={asset.listingId || asset.id} style={{padding:28}}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'start'}}>
                     <div style={{flex:1}}>
-                      <h4 style={{fontSize:'1.3rem',fontWeight:700,color:'#fff',marginBottom:8}}>{asset.type}</h4>
+                      <h4 style={{fontSize:'1.3rem',fontWeight:700,color:'#fff',marginBottom:8}}>{asset.assetType || asset.type}</h4>
                       <div style={{display:'flex',gap:16,marginBottom:16}}>
                         <div>
                           <div className="small-muted" style={{marginBottom:4}}>Seller</div>
-                          <div style={{fontSize:'0.95rem',fontWeight:600,color:'#fff'}}>{asset.owner}</div>
+                          <div style={{fontSize:'0.95rem',fontWeight:600,color:'#fff'}}>{asset.owner || asset.sellerId}</div>
                         </div>
                         <div>
                           <div className="small-muted" style={{marginBottom:4}}>Quantity</div>
@@ -381,14 +457,14 @@ export default function InvestorDashboard(){
                         </div>
                         <div>
                           <div className="small-muted" style={{marginBottom:4}}>Expected Yield</div>
-                          <div style={{fontSize:'0.95rem',fontWeight:600,color:'var(--accent)'}}>{asset.yield}</div>
+                          <div style={{fontSize:'0.95rem',fontWeight:600,color:'var(--accent)'}}>{asset.yield || '—'}</div>
                         </div>
                       </div>
                     </div>
                     <div style={{textAlign:'right'}}>
-                      <div style={{fontSize:'2rem',fontWeight:700,color:'var(--accent)',marginBottom:12}}>{asset.price}</div>
+                      <div style={{fontSize:'2rem',fontWeight:700,color:'var(--accent)',marginBottom:12}}>{typeof asset.price === 'number' ? `₹${asset.price.toLocaleString()}` : (asset.price || '—')}</div>
                       <div style={{display:'flex',gap:12}}>
-                        <button className="btn primary" style={{padding:'12px 24px',fontSize:'1rem'}}>
+                        <button className="btn primary" style={{padding:'12px 24px',fontSize:'1rem'}} onClick={() => handleBuy(asset)}>
                           💰 Buy Now
                         </button>
                         <button className="btn" style={{padding:'12px 24px',fontSize:'1rem'}}>
@@ -408,8 +484,8 @@ export default function InvestorDashboard(){
           <GlassPanel style={{padding:32}}>
             <h3 style={{fontSize:'1.6rem',fontWeight:700,marginBottom:24,color:'#fff'}}>Active Orders</h3>
             <div style={{display:'flex',flexDirection:'column',gap:16}}>
-              {activeOrders.map((order, i) => (
-                <div key={i} style={{
+              {tradeHistory && tradeHistory.length > 0 ? tradeHistory.map((t, i) => (
+                <div key={t.tradeId || i} style={{
                   padding:20,
                   background:'rgba(255,255,255,0.02)',
                   borderRadius:12,
@@ -423,28 +499,142 @@ export default function InvestorDashboard(){
                       <span style={{
                         fontWeight:700,
                         fontSize:'1.1rem',
-                        color: order.type === 'Buy' ? 'var(--accent)' : '#ff8a65'
-                      }}>{order.type}</span>
+                        color: t.buyerId === investorId ? 'var(--accent)' : '#ff8a65'
+                      }}>{t.buyerId === investorId ? 'Buy' : 'Sell'}</span>
                       <span style={{
                         padding:'4px 12px',
                         borderRadius:6,
-                        background: order.status === 'Filled' ? 'rgba(130,202,157,0.1)' : 'rgba(255,193,58,0.1)',
-                        color: order.status === 'Filled' ? '#82ca9d' : '#ffc13a',
+                        background: 'rgba(130,202,157,0.1)',
+                        color: '#82ca9d',
                         fontSize:'0.85rem',
                         fontWeight:600
-                      }}>{order.status}</span>
+                      }}>{new Date(t.timestamp).toLocaleDateString()}</span>
                     </div>
                     <div style={{fontSize:'0.95rem',color:'var(--muted)'}}>
-                      {order.asset} • {order.amount} @ {order.price}
+                      {t.assetType} • {t.quantity} @ ₹{t.price}
                     </div>
                   </div>
                   <button className="btn" style={{padding:'10px 20px',fontSize:'0.9rem'}}>
-                    Cancel Order
+                    View
                   </button>
                 </div>
-              ))}
+              )) : (
+                <div style={{padding:20,color:'var(--muted)'}}>No trades yet — your executed trades will appear here.</div>
+              )}
             </div>
           </GlassPanel>
+        )}
+
+        {/* Blockchain Tab */}
+        {activeTab === 'blockchain' && (
+          <div>
+            <div style={{marginBottom:24}}>
+              <h3 style={{fontSize:'1.6rem',fontWeight:700,color:'#fff',marginBottom:8}}>Blockchain Transactions</h3>
+              <p className="small-muted">All your investment transactions recorded on the blockchain</p>
+            </div>
+
+            {blockchainTxns && blockchainTxns.length > 0 ? (
+              <div style={{display:'flex',flexDirection:'column',gap:16}}>
+                {blockchainTxns.map((tx) => (
+                  <GlassPanel key={tx.txHash} style={{padding:24}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'start',marginBottom:16}}>
+                      <div style={{flex:1}}>
+                        <div style={{display:'flex',gap:12,alignItems:'center',marginBottom:8}}>
+                          <span style={{fontSize:'1.5rem'}}>
+                            {tx.type === 'ASSET_PURCHASE' ? '🛒' : tx.type === 'ASSET_SALE' ? '💰' : '🔄'}
+                          </span>
+                          <span style={{fontSize:'1.1rem',fontWeight:700,color:'#fff'}}>
+                            {tx.type.replace(/_/g, ' ')}
+                          </span>
+                          <span style={{
+                            padding:'4px 12px',
+                            borderRadius:6,
+                            background: 'rgba(130,202,157,0.1)',
+                            color: '#82ca9d',
+                            fontSize:'0.85rem',
+                            fontWeight:600
+                          }}>{tx.status}</span>
+                        </div>
+                        <div style={{fontSize:'0.95rem',color:'var(--muted)',marginBottom:12}}>
+                          {tx.assetType} • {tx.tokens} tokens • {new Date(tx.timestamp).toLocaleString()}
+                        </div>
+                        <div style={{
+                          padding:'12px',
+                          background:'rgba(0,0,0,0.2)',
+                          borderRadius:8,
+                          fontFamily:'monospace',
+                          fontSize:'0.85rem',
+                          color:'var(--accent)',
+                          wordBreak:'break-all'
+                        }}>
+                          <strong>Tx Hash:</strong> {tx.txHash}
+                        </div>
+                      </div>
+                      <div style={{textAlign:'right',marginLeft:24}}>
+                        <div style={{fontSize:'1.5rem',fontWeight:700,color:'var(--accent)',marginBottom:8}}>
+                          ₹{tx.amount?.toLocaleString()}
+                        </div>
+                        <div style={{fontSize:'0.85rem',color:'var(--muted)',marginBottom:8}}>
+                          Block: {tx.blockNumber}
+                        </div>
+                        <div style={{fontSize:'0.85rem',color:'var(--muted)',marginBottom:12}}>
+                          Confirmations: {tx.confirmations}
+                        </div>
+                        <button 
+                          className="btn"
+                          onClick={() => {
+                            setCurrentTx(tx);
+                            setShowTxModal(true);
+                          }}
+                          style={{padding:'8px 16px',fontSize:'0.9rem'}}
+                        >
+                          View Details
+                        </button>
+                      </div>
+                    </div>
+
+                    <div style={{
+                      display:'grid',
+                      gridTemplateColumns:'repeat(2,1fr)',
+                      gap:16,
+                      marginTop:16,
+                      paddingTop:16,
+                      borderTop:'1px solid rgba(255,255,255,0.1)'
+                    }}>
+                      <div>
+                        <div style={{fontSize:'0.85rem',color:'var(--muted)',marginBottom:4}}>From</div>
+                        <div style={{fontSize:'0.9rem',color:'#fff',fontFamily:'monospace'}}>
+                          {tx.from.slice(0,6)}...{tx.from.slice(-4)}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:'0.85rem',color:'var(--muted)',marginBottom:4}}>To</div>
+                        <div style={{fontSize:'0.9rem',color:'#fff',fontFamily:'monospace'}}>
+                          {tx.to.slice(0,6)}...{tx.to.slice(-4)}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:'0.85rem',color:'var(--muted)',marginBottom:4}}>Gas Used</div>
+                        <div style={{fontSize:'0.9rem',color:'#fff'}}>{tx.gasUsed?.toLocaleString()}</div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:'0.85rem',color:'var(--muted)',marginBottom:4}}>Gas Fee</div>
+                        <div style={{fontSize:'0.9rem',color:'#fff'}}>{tx.gasFee}</div>
+                      </div>
+                    </div>
+                  </GlassPanel>
+                ))}
+              </div>
+            ) : (
+              <GlassPanel style={{padding:40}}>
+                <div style={{textAlign:'center',padding:'40px 20px',color:'var(--muted)'}}>
+                  <div style={{fontSize:'4rem',marginBottom:16}}>⛓️</div>
+                  <div style={{fontSize:'1.2rem',marginBottom:12}}>No Blockchain Transactions Yet</div>
+                  <div>Your blockchain transactions will appear here once you purchase assets</div>
+                </div>
+              </GlassPanel>
+            )}
+          </div>
         )}
 
         {/* Analytics Tab */}
@@ -459,6 +649,119 @@ export default function InvestorDashboard(){
           </GlassPanel>
         )}
       </div>
+
+      {/* Blockchain Transaction Modal */}
+      {showTxModal && currentTx && (
+        <div style={{
+          position:'fixed',
+          top:0,
+          left:0,
+          right:0,
+          bottom:0,
+          background:'rgba(0,0,0,0.9)',
+          backdropFilter:'blur(12px)',
+          display:'flex',
+          alignItems:'center',
+          justifyContent:'center',
+          zIndex:10000,
+          padding:20
+        }} onClick={() => setShowTxModal(false)}>
+          <GlassPanel style={{padding:40,maxWidth:650,width:'100%'}} onClick={(e) => e.stopPropagation()}>
+            <div style={{textAlign:'center',marginBottom:32}}>
+              <div style={{fontSize:'4rem',marginBottom:16}}>⛓️</div>
+              <h3 style={{fontSize:'2rem',fontWeight:700,color:'var(--accent)',marginBottom:8}}>
+                Transaction Recorded on Blockchain
+              </h3>
+              <p style={{color:'var(--muted)',fontSize:'1.05rem'}}>
+                Your transaction has been successfully recorded on the blockchain
+              </p>
+            </div>
+
+            <div style={{
+              background:'rgba(199,255,58,0.05)',
+              border:'1px solid rgba(199,255,58,0.2)',
+              borderRadius:12,
+              padding:20,
+              marginBottom:24
+            }}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Transaction Hash</span>
+                <span style={{color:'var(--accent)',fontFamily:'monospace',fontSize:'0.9rem',fontWeight:600}}>
+                  {currentTx.txHash.slice(0,10)}...{currentTx.txHash.slice(-8)}
+                </span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Block Number</span>
+                <span style={{color:'#fff',fontWeight:600}}>{currentTx.blockNumber}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Transaction Type</span>
+                <span style={{color:'#fff',fontWeight:600}}>{currentTx.type.replace(/_/g, ' ')}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Asset</span>
+                <span style={{color:'#fff',fontWeight:600}}>{currentTx.assetType}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Tokens</span>
+                <span style={{color:'#fff',fontWeight:600}}>{currentTx.tokens}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Amount</span>
+                <span style={{color:'var(--accent)',fontWeight:600}}>₹{currentTx.amount?.toLocaleString()}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Gas Fee</span>
+                <span style={{color:'#fff',fontWeight:600}}>{currentTx.gasFee}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:16,borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                <span style={{color:'var(--muted)'}}>Confirmations</span>
+                <span style={{color:'#82ca9d',fontWeight:600}}>✓ {currentTx.confirmations}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between'}}>
+                <span style={{color:'var(--muted)'}}>Status</span>
+                <span style={{
+                  padding:'4px 12px',
+                  borderRadius:6,
+                  background:'rgba(130,202,157,0.15)',
+                  color:'#82ca9d',
+                  fontSize:'0.85rem',
+                  fontWeight:600,
+                  textTransform:'uppercase'
+                }}>{currentTx.status}</span>
+              </div>
+            </div>
+
+            <div style={{display:'flex',gap:12}}>
+              <button 
+                className="btn" 
+                onClick={() => {
+                  navigator.clipboard.writeText(currentTx.txHash);
+                  alert('Transaction hash copied to clipboard!');
+                }}
+                style={{flex:1,padding:'14px',fontSize:'1rem'}}
+              >
+                📋 Copy Hash
+              </button>
+              <button 
+                className="btn" 
+                onClick={() => window.open(blockchain.getExplorerUrl(currentTx.txHash), '_blank')}
+                style={{flex:1,padding:'14px',fontSize:'1rem'}}
+              >
+                🔍 View on Explorer
+              </button>
+              <button 
+                className="btn primary" 
+                onClick={() => setShowTxModal(false)}
+                style={{padding:'14px 24px',fontSize:'1rem'}}
+              >
+                Close
+              </button>
+            </div>
+          </GlassPanel>
+        </div>
+      )}
+
       <Footer />
     </div>
   );
